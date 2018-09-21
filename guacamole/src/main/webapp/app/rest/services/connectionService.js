@@ -141,7 +141,7 @@ angular.module('rest').factory('connectionService', ['$injector',
         };
 
         // Retrieve connection prompts
-        return $http({
+        return requestService({
             cache   : cacheService.connections,
             method  : 'GET',
             url     : 'api/session/data/' + encodeURIComponent(dataSource) + '/connections/' + encodeURIComponent(id) + '/prompts',
