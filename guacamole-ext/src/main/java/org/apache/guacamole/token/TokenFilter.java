@@ -19,7 +19,10 @@
 
 package org.apache.guacamole.token;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,7 +41,13 @@ public class TokenFilter {
      * escape character preceding the token, the name of the token, and the
      * entire token itself.
      */
-    private final Pattern tokenPattern = Pattern.compile("(.*?)(^|.)(\\$\\{([A-Za-z0-9_]*)\\})");
+    private static final Pattern tokenPattern = Pattern.compile("(.*?)(^|.)(\\$\\{([A-Za-z0-9_]*)\\})");
+
+    /**
+     * Regular expression which matches the prompt token, specifically, with
+     * groups to match leading text, escape characters, etc.
+     */
+    private static final Pattern promptPattern = Pattern.compile("(.*?)(^|.)(\\$\\{" + StandardTokens.PROMPT_TOKEN_STRING + "\\})");
 
     /**
      * The index of the capturing group within tokenPattern which matches
@@ -206,6 +215,76 @@ public class TokenFilter {
     }
 
     /**
+     * Filter a given input string for prompt tokens, replacing
+     * occurences of the prompt token with the corresponding
+     * input provided in the tokens list.
+     *
+     * @param input
+     *     String to filter for prompt tokens.
+     *
+     * @param tokens
+     *     List of 0-indexed strings provided to replace
+     *     occurences of the prompt token with.
+     *
+     * @return
+     *     The filtered string, with occurences of the
+     *     prompt token replaced with provided input.
+     */
+    public String filter(String input, List<String> tokens) {
+
+        // If no prompt values where provided, just return the input.
+        if (tokens == null || tokens.size() < 1)
+            return input;
+
+        // If input is equal to the numeric token, return immediately.
+        if (input.equals(StandardTokens.PROMPT_TOKEN_NUMERIC))
+            return tokens.get(0);
+
+        StringBuilder output = new StringBuilder();
+        Matcher promptMatcher = promptPattern.matcher(input);
+
+        // Track last regex match
+        int endOfLastMatch = 0;
+        int matchCounter = 0;
+
+        // For each occurrence of the prompt token
+        while (promptMatcher.find()) {
+            String literal = promptMatcher.group(LEADING_TEXT_GROUP);
+            String escape = promptMatcher.group(ESCAPE_CHAR_GROUP);
+
+            output.append(literal);
+
+            if ("$".equals(escape)) {
+                String notToken = promptMatcher.group(TOKEN_GROUP);
+                output.append(notToken);
+            }
+
+            else {
+                output.append(escape);
+
+                String tokenValue = tokens.get(matchCounter);
+
+                if (tokenValue == null)
+                    output.append(promptMatcher.group(TOKEN_GROUP));
+
+                else
+                    output.append(tokenValue);
+
+            }
+
+            // Update last regex match and increment counter
+            endOfLastMatch = promptMatcher.end();
+            matchCounter++;
+
+        }
+
+        output.append(input.substring(endOfLastMatch));
+
+        return output.toString();
+
+    }
+
+    /**
      * Given an arbitrary map containing String values, replace each non-null
      * value with the corresponding filtered value.
      *
@@ -224,6 +303,96 @@ public class TokenFilter {
             
         }
         
+    }
+
+    /**
+     * Given an arbitrary map containing string values, return a map that contains
+     * the parameter names and an array of instances in those parameters where
+     * prompts should occur.
+     *
+     * @param parameters
+     *     The parameters to search for prompts.
+     *
+     * @return
+     *     A map where the key is the parameter name and the value is an array
+     *     of 0-indexed instances in the parameter that need to be prompted.
+     */
+    public static Map<String, List<String>> getPrompts(Map<?, String> parameters) {
+
+        Map<String, List<String>> prompts = new HashMap<String, List<String>>();
+
+        // Loop through each parameter entry
+        for (Map.Entry<?, String> entry : parameters.entrySet()) {
+
+            String key = entry.getKey().toString();
+            String value = entry.getValue();
+
+            // If the entire parameter value equals the numeric prompt
+            // token, add it and go to the next entry.
+            if (value.equals(StandardTokens.PROMPT_TOKEN_NUMERIC)) {
+                prompts.put(key, Collections.<String>singletonList(""));
+                continue;
+            }
+
+            Matcher promptMatcher = promptPattern.matcher(value);
+            List<String> promptList = new ArrayList<String>();
+
+            // For each possible token
+            while (promptMatcher.find()) {
+
+                // Pull possible leading text and first char before possible token
+                String literal = promptMatcher.group(LEADING_TEXT_GROUP);
+                String escape = promptMatcher.group(ESCAPE_CHAR_GROUP);
+
+                // If char before token is '$', the token itself is escaped
+                if ("$".equals(escape)) {
+                    String notToken = promptMatcher.group(TOKEN_GROUP);
+                    continue;
+                }
+
+                // If char is not '$', interpret as a prompt
+                else {
+                    String pretext = literal + escape;
+                    promptList.add(pretext);
+                }
+
+            }
+            if (promptList.size() > 0)
+                prompts.put(key,promptList);
+
+        }
+
+        return prompts;
+
+    }
+
+    /**
+     * Walk through each parameter and look for user-provided input in prompts.
+     * If input is found, filter the parameter entry, replacing the prompt token
+     * with the user-provided value.
+     *
+     * @param parameters
+     *     Configuration parameters pulled from the connection configuration.
+     *
+     * @param prompts
+     *     Data provided via input from the user.
+     */
+    public void filterPrompts(Map<?, String> parameters, Map<String, List<String>> prompts) {
+
+        for (Map.Entry<?, String> entry : parameters.entrySet()) {
+
+            String parameter = entry.getKey().toString();
+            String currentValue = entry.getValue();
+            List<String> promptValues = prompts.get(parameter);
+
+            if (promptValues == null || promptValues.size() < 1)
+                continue;
+
+            if (currentValue != null && !currentValue.equals(""))
+                entry.setValue(filter(currentValue, promptValues));
+
+        }
+
     }
 
 }

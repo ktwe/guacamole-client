@@ -18,22 +18,8 @@
  */
 
 /**
- * The module for the root of the application.
+ * The module for code used to display prompts to the user.
  */
-angular.module('index', [
-    'auth',
-    'client',
-    'clipboard',
-    'home',
-    'login',
-    'manage',
-    'navigation',
-    'ngRoute',
-    'ngTouch',
-    'notification',
-    'pascalprecht.translate',
-    'prompt',
-    'rest',
-    'settings',
-    'templates-main'
+angular.module('prompt', [
+    'storage'
 ]);

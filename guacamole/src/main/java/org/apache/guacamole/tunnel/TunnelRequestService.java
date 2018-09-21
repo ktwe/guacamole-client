@@ -21,7 +21,10 @@ package org.apache.guacamole.tunnel;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.apache.guacamole.GuacamoleException;
 import org.apache.guacamole.GuacamoleSecurityException;
 import org.apache.guacamole.GuacamoleSession;
@@ -38,6 +41,7 @@ import org.apache.guacamole.net.event.TunnelConnectEvent;
 import org.apache.guacamole.rest.auth.AuthenticationService;
 import org.apache.guacamole.protocol.GuacamoleClientInformation;
 import org.apache.guacamole.rest.event.ListenerService;
+import org.apache.guacamole.token.TokenFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -170,6 +174,50 @@ public class TunnelRequestService {
     }
 
     /**
+     * Given a TunnelRequest, Connection, and GuacamoleClientInformation, go through
+     * any prompts for the given connection, and add the user-provided values to
+     * the list of parameters for the client.
+     *
+     * @param request
+     *     The TunnelRequest object that contains potential user-provided
+     *     input.
+     *
+     * @param connection
+     *     The Connection object for which parameters are being provided.
+     *
+     * @param info
+     *     The GuacamoleClientInformation object where the user-provided
+     *     parameters will be stored.
+     *
+     * @throws GuacamoleException
+     *     If an error occurs retrieving the connection, configuration, or
+     *     parameters, or if a required parameter was not provided.
+     */
+    protected void getUserInput(TunnelRequest request, Connection connection,
+            GuacamoleClientInformation info) throws GuacamoleException {
+
+        // Get the connection configuration
+        Map<String, List<String>> prompts = TokenFilter.getPrompts(connection.getConfiguration().getParameters());
+        Map<String, List<String>> clientParameters = info.getParameters();
+
+        // Loop through prompts for a connection and grab the associated user-provided
+        // data.
+        for (Map.Entry<String, List<String>> entry : prompts.entrySet()) {
+            String parameter = entry.getKey();
+            List<String> positions = entry.getValue();
+            List<String> valueList = new ArrayList<String>();
+            for (int i = 0; i < positions.size(); i++) {
+                String userValue = request.getParameter(parameter + "[" + i + "]");
+                if (userValue == null)
+                    throw new GuacamoleException("Expected parameter was not provided: " + parameter);
+                valueList.add(userValue);
+            }
+            clientParameters.put(parameter, valueList);
+        }
+
+    }
+
+    /**
      * Creates a new tunnel using which is connected to the connection or
      * connection group identifier by the given ID. Client information
      * is specified in the {@code info} parameter.
@@ -187,6 +235,9 @@ public class TunnelRequestService {
      * @param info
      *     Information describing the connected Guacamole client.
      *
+     * @param request
+     *     The TunnelRequest coming in to the serve.
+     *
      * @return
      *     A new tunnel, connected as required by the request.
      *
@@ -195,7 +246,7 @@ public class TunnelRequestService {
      */
     protected GuacamoleTunnel createConnectedTunnel(UserContext context,
             final TunnelRequest.Type type, String id,
-            GuacamoleClientInformation info)
+            GuacamoleClientInformation info, TunnelRequest request)
             throws GuacamoleException {
 
         // Create connected tunnel from identifier
@@ -214,6 +265,9 @@ public class TunnelRequestService {
                     logger.info("Connection \"{}\" does not exist for user \"{}\".", id, context.self().getIdentifier());
                     throw new GuacamoleSecurityException("Requested connection is not authorized.");
                 }
+
+                // Get the user input
+                getUserInput(request, connection, info);
 
                 // Connect tunnel
                 tunnel = connection.connect(info);
@@ -390,7 +444,7 @@ public class TunnelRequestService {
         try {
 
             // Create connected tunnel using provided connection ID and client information
-            GuacamoleTunnel tunnel = createConnectedTunnel(userContext, type, id, info);
+            GuacamoleTunnel tunnel = createConnectedTunnel(userContext, type, id, info, request);
 
             // Notify listeners to allow connection to be vetoed
             fireTunnelConnectEvent(session.getAuthenticatedUser(),

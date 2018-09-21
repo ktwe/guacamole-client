@@ -43,6 +43,7 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
     var connectionGroupService = $injector.get('connectionGroupService');
     var connectionService      = $injector.get('connectionService');
     var requestService         = $injector.get('requestService');
+    var guacPrompt             = $injector.get('guacPrompt');
     var tunnelService          = $injector.get('tunnelService');
     var guacAudio              = $injector.get('guacAudio');
     var guacHistory            = $injector.get('guacHistory');
@@ -514,27 +515,70 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
         // Parse connection details from ID
         var clientIdentifier = ClientIdentifier.fromString(id);
 
-        // Connect the Guacamole client
-        getConnectString(clientIdentifier, connectionParameters)
-        .then(function connectClient(connectString) {
-            client.connect(connectString);
+        var gettingConnectionData = $q.defer();
+        // If using a connection, pull connection name
+        if (clientIdentifier.type === ClientIdentifier.Types.CONNECTION)
+            gettingConnectionData = connectionService.getConnection(clientIdentifier.dataSource, clientIdentifier.id);
+
+        // If using a connection group, pull connection name
+        else if (clientIdentifier.type === ClientIdentifier.Types.CONNECTION_GROUP)
+            gettingConnectionData = connectionGroupService.getConnectionGroup(clientIdentifier.dataSource, clientIdentifier.id);
+        
+        else
+            gettingConnectionData.reject('Invalid connection type.');
+
+        // Get Connection Prompts
+        var gettingConnectionPrompts = connectionService.getConnectionPrompts(clientIdentifier.dataSource, clientIdentifier.id);
+
+        // When we've received connection data and prompts, display prompts to user.        
+        $q.all([gettingConnectionData,gettingConnectionPrompts])
+        .then(function connectClient(clientData) {
+
+            var connData = clientData[0].data;
+            var connPrompts = clientData[1].data;
+
+            // Display the prompts, then process them
+            guacPrompt.getUserInput(connPrompts,connData)
+            .then(function receivedUserInput(data) {
+
+                // Create a parameter string from the received data
+                var userData = '';
+                for (var key in data) {
+                    var param = data[key];
+                    for (var idx in param) {
+                        var inst = param[idx];
+                        if (userData != '')
+                            userData += '&';
+                        userData += key + '[' + idx + ']=' + encodeURIComponent(inst);
+                    }
+                }
+                connectionParameters = (connectionParameters ? connectionParameters + '&' + userData : userData);
+
+                // Get the connection string, and then connect.
+                getConnectString(clientIdentifier, connectionParameters)
+                .then(function connectClient(connectString) {
+                    client.connect(connectString);
+                    guacPrompt.showPrompt(false);
+                });
+            })
+            .catch(function noUserInput(reason) {
+
+                // Disconnect, if connected
+                client.disconnect();
+
+                // Update state
+                ManagedClientState.setConnectionState(managedClient.clientState,
+                    ManagedClientState.ConnectionState.CLIENT_ERROR,
+                    reason);
+
+            });
+            
         });
 
-        // If using a connection, pull connection name
-        if (clientIdentifier.type === ClientIdentifier.Types.CONNECTION) {
-            connectionService.getConnection(clientIdentifier.dataSource, clientIdentifier.id)
-            .then(function connectionRetrieved(connection) {
-                managedClient.name = managedClient.title = connection.name;
-            }, requestService.WARN);
-        }
-        
-        // If using a connection group, pull connection name
-        else if (clientIdentifier.type === ClientIdentifier.Types.CONNECTION_GROUP) {
-            connectionGroupService.getConnectionGroup(clientIdentifier.dataSource, clientIdentifier.id)
-            .then(function connectionGroupRetrieved(group) {
-                managedClient.name = managedClient.title = group.name;
-            }, requestService.WARN);
-        }
+        // Set the window title.
+        gettingConnectionData.success(function connectionRetrieved(connection) {
+            managedClient.name = managedClient.title = connection.name;
+        });
 
         return managedClient;
 
